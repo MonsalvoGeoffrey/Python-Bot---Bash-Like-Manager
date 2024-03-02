@@ -6,9 +6,27 @@ load_dotenv()
 import os
 import discord
 from discord import Message
-from typing import List, Optional, Any, Tuple
+from typing import List, Optional, Tuple, Match
 import shlex
 import asyncio
+import re
+
+
+
+
+# equivalent of shlex_split that preserve expressions
+def custom_shlex_split(s: str):
+    # Improved pattern to match:
+    # 1. Quoted strings (both single and double quotes) and return without quotes
+    # 2. $(expressions) including nested ones
+    # 3. Non-space sequences (words)
+    pattern = r"""(?:'([^']*)'|"([^"]*)"|(\$\((?:[^()]|\([^()]*\))*\))|(\S+))"""
+    matches = re.findall(pattern, s)
+    # Flatten the list of tuples, filter out empty strings, and concatenate non-empty matches
+    return ["".join(match) for match in matches if any(match)]
+
+
+
 
 
 async def exec_command(message:Message, raw_arguments: list[str], stdin: Optional[List[str]]=None):
@@ -30,6 +48,17 @@ async def exec_command(message:Message, raw_arguments: list[str], stdin: Optiona
             elif state == "char":
                 char_args.append((cur_arg, None))
             break
+
+        expression_match: Optional[Match[str]] = re.match(r'^\$\((.*)\)$', next_arg)
+        if expression_match:
+            # Extract the content of the expression without the $( and )
+            content = expression_match.group(1)
+            out = await exec_command(message, custom_shlex_split(content))
+            if out:
+                out.reverse()
+                for output in out:
+                    raw_arguments.insert(0, output)
+            continue
 
         if next_arg.startswith("--"):
             if state == "word":
@@ -76,13 +105,21 @@ Next Command: {str(raw_arguments)}
         await asyncio.sleep(int(pos_args[0]) if len(pos_args) > 0 else 1)
     elif command == "echo":
         await message.reply(" ".join(pos_args))
+    elif command == "sum":
+        res = 0
+        for num in pos_args:
+            res += int(num)
+        stdout.append(str(res))
+
 
 
     if len(raw_arguments) > 0:
         await exec_command(message, raw_arguments, stdout)
     else:
-        for output in stdout:
-            await message.reply(output)
+        # for output in stdout:
+            # await message.reply(output)
+        return stdout
+
     # print(raw_arguments)
 
 
@@ -95,9 +132,13 @@ class MyClient(discord.Client):
         if message.author.bot:
             return
         print(f'Message from {message.author}: {message.content}')
-        raw_arguments = shlex.split(message.content)
+        raw_arguments = custom_shlex_split(message.content)
         if raw_arguments[0] == "exec":
-            await exec_command(message, raw_arguments[1:])
+            stdout = await exec_command(message, raw_arguments[1:])
+            if not stdout:
+                return
+            for output in stdout:
+                await message.reply(output)
 
 
 intents = discord.Intents.default()
